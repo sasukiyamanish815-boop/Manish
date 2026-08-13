@@ -1,4 +1,4 @@
-name: Build APK from ZIP
+name: Build Mojilo Manish APK
 
 on:
   workflow_dispatch:
@@ -10,52 +10,87 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
+    permissions:
+      contents: read
+
     steps:
-      # 1. Repository checkout
+
+      # --------------------------------------------------
+      # 1. Checkout repository
+      # --------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2. Java 17
+
+      # --------------------------------------------------
+      # 2. Setup JDK 17
+      # --------------------------------------------------
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      # 3. Extract ZIP
-      - name: Extract ZIP
+
+      # --------------------------------------------------
+      # 3. Find and Extract the uploaded ZIP
+      # --------------------------------------------------
+      - name: Extract Android Project ZIP
         shell: bash
         run: |
           set -e
 
-          echo "ZIP files:"
-          find . -maxdepth 2 -type f -iname "*.zip" -print
+          echo "======================================"
+          echo "Searching for uploaded ZIP..."
+          echo "======================================"
 
-          ZIP_FILE=$(find . -maxdepth 2 -type f -iname "*.zip" | head -n 1)
+          # Prefer the latest ZIP you uploaded
+          ZIP_FILE=""
+
+          if [ -f "mojilo-manish-question-management-update.zip" ]; then
+            ZIP_FILE="mojilo-manish-question-management-update.zip"
+          else
+            ZIP_FILE=$(find . -maxdepth 2 -type f -iname "*.zip" \
+              -not -path "./.git/*" \
+              -printf "%T@ %p\n" | sort -nr | head -n 1 | cut -d' ' -f2-)
+          fi
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: ZIP file not found."
+            echo "ERROR: No ZIP file found."
             exit 1
           fi
 
-          echo "Using ZIP: $ZIP_FILE"
+          echo "ZIP selected:"
+          echo "$ZIP_FILE"
 
+          rm -rf extracted
           mkdir -p extracted
+
           unzip -o "$ZIP_FILE" -d extracted
 
-          echo "Extracted files:"
-          find extracted -maxdepth 4 -type f | head -100
+          echo ""
+          echo "======================================"
+          echo "ZIP extracted successfully"
+          echo "======================================"
 
-      # 4. Find Android Gradle project
-      - name: Find Android Gradle project
+          find extracted -maxdepth 4 -type f | head -150
+
+
+      # --------------------------------------------------
+      # 4. Find Android Gradle Project
+      # --------------------------------------------------
+      - name: Find Android Gradle Project
         shell: bash
         run: |
           set -e
 
-          echo "Searching for Gradle project..."
+          echo "======================================"
+          echo "Searching for Android Gradle project..."
+          echo "======================================"
 
           PROJECT_DIR=""
 
+          # First look for settings.gradle / settings.gradle.kts
           SETTINGS_FILE=$(find extracted -type f \
             \( -name "settings.gradle" -o -name "settings.gradle.kts" \) \
             -not -path "*/.gradle/*" \
@@ -65,7 +100,9 @@ jobs:
             PROJECT_DIR=$(dirname "$SETTINGS_FILE")
           fi
 
+          # If settings file wasn't found, search for build.gradle
           if [ -z "$PROJECT_DIR" ]; then
+
             BUILD_FILE=$(find extracted -type f \
               \( -name "build.gradle" -o -name "build.gradle.kts" \) \
               -not -path "*/.gradle/*" \
@@ -74,37 +111,149 @@ jobs:
             if [ -n "$BUILD_FILE" ]; then
               PROJECT_DIR=$(dirname "$BUILD_FILE")
             fi
+
           fi
 
           if [ -z "$PROJECT_DIR" ]; then
+            echo ""
             echo "ERROR: Android Gradle project not found."
-            echo "Files inside ZIP:"
-            find extracted -maxdepth 6 -print
+            echo ""
+            echo "Files inside extracted ZIP:"
+            find extracted -maxdepth 8 -print
             exit 1
           fi
 
-          echo "Android project found at:"
+          echo ""
+          echo "======================================"
+          echo "Android project found:"
           echo "$PROJECT_DIR"
+          echo "======================================"
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-      # 5. Check project
-      - name: Check Android project
+
+      # --------------------------------------------------
+      # 5. Automatically Fix Common Compose Imports
+      # --------------------------------------------------
+      - name: Fix Kotlin Compose Imports
         shell: bash
         run: |
           set -e
 
-          echo "Project directory:"
-          echo "$PROJECT_DIR"
+          echo "======================================"
+          echo "Checking Kotlin Compose imports..."
+          echo "======================================"
 
           cd "$PROJECT_DIR"
 
+          find . -type f -name "*.kt" \
+            -not -path "*/build/*" \
+            -print0 | while IFS= read -r -d '' FILE
+          do
+
+            # ------------------------------------------
+            # fillMaxWidth
+            # ------------------------------------------
+            if grep -qE '\.fillMaxWidth\(|Modifier\.fillMaxWidth\(' "$FILE"; then
+              if ! grep -q 'import androidx.compose.foundation.layout.fillMaxWidth' "$FILE" \
+                 && ! grep -q 'import androidx.compose.foundation.layout.\*' "$FILE"; then
+
+                echo "Adding fillMaxWidth import to:"
+                echo "$FILE"
+
+                sed -i '/^package /a import androidx.compose.foundation.layout.fillMaxWidth' "$FILE"
+              fi
+            fi
+
+
+            # ------------------------------------------
+            # fillMaxSize
+            # ------------------------------------------
+            if grep -qE '\.fillMaxSize\(|Modifier\.fillMaxSize\(' "$FILE"; then
+              if ! grep -q 'import androidx.compose.foundation.layout.fillMaxSize' "$FILE" \
+                 && ! grep -q 'import androidx.compose.foundation.layout.\*' "$FILE"; then
+
+                echo "Adding fillMaxSize import to:"
+                echo "$FILE"
+
+                sed -i '/^package /a import androidx.compose.foundation.layout.fillMaxSize' "$FILE"
+              fi
+            fi
+
+
+            # ------------------------------------------
+            # fillMaxHeight
+            # ------------------------------------------
+            if grep -qE '\.fillMaxHeight\(|Modifier\.fillMaxHeight\(' "$FILE"; then
+              if ! grep -q 'import androidx.compose.foundation.layout.fillMaxHeight' "$FILE" \
+                 && ! grep -q 'import androidx.compose.foundation.layout.\*' "$FILE"; then
+
+                echo "Adding fillMaxHeight import to:"
+                echo "$FILE"
+
+                sed -i '/^package /a import androidx.compose.foundation.layout.fillMaxHeight' "$FILE"
+              fi
+            fi
+
+
+            # ------------------------------------------
+            # wrapContentWidth
+            # ------------------------------------------
+            if grep -qE '\.wrapContentWidth\(' "$FILE"; then
+              if ! grep -q 'import androidx.compose.foundation.layout.wrapContentWidth' "$FILE" \
+                 && ! grep -q 'import androidx.compose.foundation.layout.\*' "$FILE"; then
+
+                echo "Adding wrapContentWidth import to:"
+                echo "$FILE"
+
+                sed -i '/^package /a import androidx.compose.foundation.layout.wrapContentWidth' "$FILE"
+              fi
+            fi
+
+
+            # ------------------------------------------
+            # wrapContentHeight
+            # ------------------------------------------
+            if grep -qE '\.wrapContentHeight\(' "$FILE"; then
+              if ! grep -q 'import androidx.compose.foundation.layout.wrapContentHeight' "$FILE" \
+                 && ! grep -q 'import androidx.compose.foundation.layout.\*' "$FILE"; then
+
+                echo "Adding wrapContentHeight import to:"
+                echo "$FILE"
+
+                sed -i '/^package /a import androidx.compose.foundation.layout.wrapContentHeight' "$FILE"
+              fi
+            fi
+
+          done
+
+          echo ""
+          echo "Compose import check completed."
+
+
+      # --------------------------------------------------
+      # 6. Show project files
+      # --------------------------------------------------
+      - name: Check Android Project
+        shell: bash
+        run: |
+          set -e
+
+          cd "$PROJECT_DIR"
+
+          echo "======================================"
+          echo "PROJECT DIRECTORY"
+          echo "======================================"
+
+          pwd
+
+          echo ""
           echo "Project files:"
           ls -la
 
           echo ""
           echo "Gradle files:"
-          find . -maxdepth 3 -type f \
+          find . -maxdepth 4 -type f \
             \( -name "build.gradle" \
             -o -name "build.gradle.kts" \
             -o -name "settings.gradle" \
@@ -112,13 +261,19 @@ jobs:
             -o -name "gradle-wrapper.properties" \) \
             -print
 
-      # 6. Setup Gradle 9.3.1
+
+      # --------------------------------------------------
+      # 7. Setup Gradle 9.3.1
+      # --------------------------------------------------
       - name: Set up Gradle 9.3.1
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.3.1'
 
-      # 7. Build Debug APK
+
+      # --------------------------------------------------
+      # 8. Build Debug APK
+      # --------------------------------------------------
       - name: Build Debug APK
         shell: bash
         run: |
@@ -126,49 +281,67 @@ jobs:
 
           cd "$PROJECT_DIR"
 
-          echo "Building Android APK..."
-          echo "Current directory:"
-          pwd
+          echo "======================================"
+          echo "BUILDING APK"
+          echo "======================================"
 
           echo ""
           echo "Gradle version:"
           gradle --version
 
           echo ""
-          echo "Starting APK build..."
+          echo "Starting Debug APK build..."
 
-          gradle assembleDebug --stacktrace --no-daemon
+          gradle assembleDebug \
+            --no-daemon \
+            --stacktrace
 
-      # 8. Find APK
+
+      # --------------------------------------------------
+      # 9. Find APK
+      # --------------------------------------------------
       - name: Find APK
         shell: bash
         run: |
           set -e
 
-          echo "Searching for APK..."
+          echo "======================================"
+          echo "SEARCHING FOR APK"
+          echo "======================================"
 
-          APK=$(find "$PROJECT_DIR" -type f \
-            -path "*/build/outputs/apk/*.apk" \
+          APK_FILE=$(find "$PROJECT_DIR" \
+            -type f \
+            -path "*/build/outputs/apk/debug/*.apk" \
             | head -n 1)
 
-          if [ -z "$APK" ]; then
+          if [ -z "$APK_FILE" ]; then
+
+            echo ""
             echo "ERROR: APK was not generated."
 
+            echo ""
             echo "Searching all APK files:"
             find "$PROJECT_DIR" -type f -name "*.apk" -print
 
             exit 1
           fi
 
+          echo ""
           echo "APK FOUND:"
-          echo "$APK"
+          echo "$APK_FILE"
 
           mkdir -p apk-output
-          cp "$APK" apk-output/Mojilo-Manish-debug.apk
 
+          cp "$APK_FILE" \
+            apk-output/Mojilo-Manish-debug.apk
+
+          echo ""
           echo "APK copied successfully."
 
-      # 9. Upload APK
+
+      # --------------------------------------------------
+      # 10. Upload APK
+      # --------------------------------------------------
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
